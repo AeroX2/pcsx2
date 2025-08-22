@@ -392,6 +392,7 @@
     <ClCompile Include="USB\usb-eyetoy\jo_mpeg.cpp" />
     <ClCompile Include="USB\usb-eyetoy\usb-eyetoy-webcam.cpp" />
     <ClCompile Include="USB\usb-hid\usb-hid.cpp" />
+    <ClCompile Include="USB\usb-lightgun\game_detection.cpp" />
     <ClCompile Include="USB\usb-lightgun\guncon2.cpp" />
     <ClCompile Include="USB\usb-mic\audiodev-cubeb.cpp" />
     <ClCompile Include="USB\usb-mic\usb-headset.cpp" />
@@ -846,6 +847,7 @@
     <ClInclude Include="USB\usb-eyetoy\usb-eyetoy-webcam.h" />
     <ClInclude Include="USB\usb-eyetoy\videodev.h" />
     <ClInclude Include="USB\usb-hid\usb-hid.h" />
+    <ClInclude Include="USB\usb-lightgun\game_detection.h" />
     <ClInclude Include="USB\usb-lightgun\guncon2.h" />
     <ClInclude Include="USB\usb-mic\audio.h" />
     <ClInclude Include="USB\usb-mic\audiodev-cubeb.h" />

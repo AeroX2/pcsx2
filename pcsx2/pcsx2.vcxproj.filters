@@ -1446,6 +1446,9 @@
     <ClCompile Include="SIO\Pad\PadNegcon.cpp">
       <Filter>System\Ps2\Iop\SIO\PAD</Filter>
     </ClCompile>
+    <ClCompile Include="USB\usb-lightgun\game_detection.cpp">
+      <Filter>System\Ps2\USB\usb-lightgun</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Patch.h">
@@ -2404,6 +2407,9 @@
     </ClInclude>
     <ClInclude Include="SIO\Pad\PadNegcon.h">
       <Filter>System\Ps2\Iop\SIO\PAD</Filter>
+    </ClInclude>
+    <ClInclude Include="USB\usb-lightgun\game_detection.h">
+      <Filter>System\Ps2\USB\usb-lightgun</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -12,12 +12,15 @@
 #include "USB/qemu-usb/USBinternal.h"
 #include "USB/qemu-usb/desc.h"
 #include "USB/usb-lightgun/guncon2.h"
+#include "USB/usb-lightgun/game_detection.h"
 #include "VMManager.h"
 
 #include "common/Console.h"
 #include "common/StringUtil.h"
 
 #include <tuple>
+#include <windows.h>
+#include "Memory.h"
 
 namespace usb_lightgun
 {
@@ -75,9 +78,11 @@ namespace usb_lightgun
 		{"SCES-50889", 90.25f, 94.5f, 390, 169, 640, 256}, // Ninja Assault (E)
 		{"SLPS-20218", 90.0f, 92.0f, 320, 134, 640, 240}, // Ninja Assault (J)
 		{"SLUS-20492", 90.25f, 92.5f, 390, 132, 640, 240}, // Ninja Assault (U)
-		{"SLES-50650", 84.75f, 96.0f, 454, 164, 640, 240}, // Resident Evil Survivor 2 (E)
+		{"SLES-50650", 90.25f, 107.0f, 425, 135, 640, 240}, // Resident Evil Survivor 2 (E) Fixed, you need to press start to skip guncon calibration
 		{"SLES-51448", 90.25f, 95.0f, 420, 132, 640, 240}, // Resident Evil - Dead Aim (E)
 		{"SLUS-20669", 90.25f, 93.5f, 420, 132, 640, 240}, // Resident Evil - Dead Aim (U)
+		//{"SLUS-20619", 90.25f, 91.75f, 453, 154, 640, 256}, // Starsky & Hutch (U)
+		{"SLES-51617", 90.25f, 82.0f, 200, 154, 640, 256}, // Starsky & Hutch (E)
 		{"SLUS-20619", 90.25f, 91.75f, 453, 154, 640, 256}, // Starsky & Hutch (U)
 		{"SCES-50300", 90.25f, 102.75f, 390, 138, 640, 256}, // Time Crisis II (E)
 		{"SLPS-20122", 90.25f, 97.5f, 390, 154, 640, 240}, // Time Crisis II (J)
@@ -90,7 +95,7 @@ namespace usb_lightgun
 		// {"SLUS-20927", 94.5f, 104.75f, 423, 407, 768, 768}, // Time Crisis - Crisis Zone (U) (480p)
 		{"SCES-50411", 89.8f, 99.9f, 421, 138, 640, 256}, // Vampire Night (E)
 		{"SLPS-25077", 90.0f, 97.5f, 422, 118, 640, 240}, // Vampire Night (J)
-		{"SLUS-20221", 89.8f, 102.5f, 422, 124, 640, 228}, // Vampire Night (U)
+		{"SLUS-20221", 89.8f, 102.5f, 452, 137, 640, 228}, // Vampire Night (U) //Fixed
 		{"SLES-51229", 110.15f, 100.0f, 433, 159, 512, 256}, // Virtua Cop - Elite Edition (E,J) (480i)
 		{"SLPM-62205", 110.15f, 100.0f, 433, 159, 512, 256}, // Virtua Cop Re-Birth (J) (480i)
 		// {"SLES-51229", 85.75f, 92.0f, 456, 164, 640, 256}, // Virtua Cop - Elite Edition (E,J) (480p)
@@ -121,7 +126,8 @@ namespace usb_lightgun
 	struct GunCon2State
 	{
 		explicit GunCon2State(u32 port_);
-
+		~GunCon2State();
+		void SendComMessage(const std::string& message, const std::string& end_line = "\r\n");
 		USBDevice dev{};
 		USBDesc desc{};
 		USBDescDevice desc_dev{};
@@ -161,6 +167,37 @@ namespace usb_lightgun
 		s16 calibration_pos_y = 0;
 
 		bool auto_config_done = false;
+
+		bool quit_thread = false;
+		bool thread_output_loaded = false;
+		int recoil_pool_speed = 10;
+		void ThreadOutputs();
+		void ThreadAutoConfigure();
+		std::thread* recoil_output_thread = nullptr;
+		std::thread* auto_config_thread = nullptr;
+		std::string active_game = "";
+		bool trigger_is_active = true;
+		std::chrono::microseconds::rep trigger_last_press = 0;
+		std::chrono::microseconds::rep trigger_last_release = 0;
+		std::chrono::microseconds::rep last_gun_shot = 0;
+		std::chrono::microseconds::rep next_gun_shot = 0;
+		int queue_size_gunshot = 0;
+		long full_auto_delay = 0;
+		long multishot_delay = 0;
+		std::chrono::microseconds::rep next_life_signal_off = 0;
+		bool life_signal_pending = false;
+		std::chrono::microseconds::rep next_recoil_signal_off = 0;
+		bool recoil_signal_pending = false;
+		int last_ammo = INT32_MAX;
+		int last_life = INT32_MAX;
+		int last_weapon = 0;
+		int last_charged = 0;
+		int last_other1 = 0;
+		int last_other2 = 0;
+		bool full_auto_active = false;
+		bool twoplayer_fix = false;
+		int lightgun_com_port = 0;
+		HANDLE serial_port;
 
 		void AutoConfigure();
 
@@ -341,6 +378,352 @@ namespace usb_lightgun
 	GunCon2State::GunCon2State(u32 port_)
 		: port(port_)
 	{
+		auto_config_thread = new std::thread(&GunCon2State::ThreadAutoConfigure, this);
+	}
+
+	GunCon2State::~GunCon2State()
+	{
+		if (recoil_output_thread != nullptr)
+		{
+			if (serial_port != INVALID_HANDLE_VALUE)
+			{
+				GunCon2State::SendComMessage("E");
+				CloseHandle(serial_port);
+				serial_port = INVALID_HANDLE_VALUE;
+			}
+			active_game = "";
+			quit_thread = true;
+			recoil_output_thread->join();
+		}
+		if (auto_config_thread != nullptr)
+		{
+			quit_thread = true;
+			auto_config_thread->join();
+		}
+
+		
+		Console.WriteLn("NIXX : GunCon2State -> Destroy");
+
+	}
+
+	void GunCon2State::SendComMessage(const std::string& message, const std::string& end_line)
+	{
+		if (serial_port != INVALID_HANDLE_VALUE)
+		{
+			DWORD bytes_written;
+			const std::string message_with_crlf = message + end_line;
+			DWORD message_length = (DWORD)message_with_crlf.length();
+			WriteFile(serial_port, message_with_crlf.c_str(), message_length, &bytes_written, NULL);
+			FlushFileBuffers(serial_port);
+		}
+	}
+
+	void GunCon2State::ThreadOutputs()
+	{
+		thread_output_loaded = true;
+		Console.WriteLn("THREAD : Thread Start");
+
+		if (active_game != "")
+		{
+			bool valid_com = false;
+			if (lightgun_com_port > 0)
+			{
+				valid_com = true;
+				std::string serial_portName = "COM" + std::to_string(lightgun_com_port);
+				if (lightgun_com_port >= 10)
+				{
+					serial_portName = "\\\\.\\COM" + std::to_string(lightgun_com_port);
+				}
+				serial_port = CreateFileA(serial_portName.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL, NULL);
+
+				if (serial_port == INVALID_HANDLE_VALUE)
+				{
+					valid_com = false;
+				}
+				if (valid_com)
+				{
+					DCB dcb_serial_params = {0};
+					dcb_serial_params.DCBlength = sizeof(dcb_serial_params);
+
+					if (!GetCommState(serial_port, &dcb_serial_params))
+					{
+						valid_com = false;
+					}
+					if (valid_com)
+					{
+						dcb_serial_params.BaudRate = 9600;
+						dcb_serial_params.ByteSize = 8;
+						dcb_serial_params.StopBits = ONESTOPBIT;
+						dcb_serial_params.Parity = NOPARITY;
+						
+						// Set timeouts for non-blocking behavior
+						COMMTIMEOUTS timeouts = {0};
+						timeouts.WriteTotalTimeoutConstant = 50;    // 50ms max write timeout
+						timeouts.WriteTotalTimeoutMultiplier = 0;   // No per-byte timeout
+						SetCommTimeouts(serial_port, &timeouts);
+					}
+					if (!SetCommState(serial_port, &dcb_serial_params))
+					{
+						valid_com = false;
+					}
+				}
+			}
+			if (valid_com)
+			{
+				GunCon2State::SendComMessage("Sx");
+			}
+			else
+			{
+				serial_port = INVALID_HANDLE_VALUE;
+			}
+		}
+
+
+		while (VMManager::HasValidVM() && active_game != "" && !quit_thread)
+		{
+			std::chrono::microseconds::rep timestamp =
+				std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+					.count();
+
+			// Use the new game detection module
+			GameDetectionState detection_state = {};
+			detection_state.active_game = active_game;
+			detection_state.port = port;
+			detection_state.last_ammo = last_ammo;
+			detection_state.last_life = last_life;
+			detection_state.last_weapon = last_weapon;
+			detection_state.last_charged = last_charged;
+			detection_state.last_other1 = last_other1;
+			detection_state.last_other2 = last_other2;
+			detection_state.trigger_is_active = trigger_is_active;
+			detection_state.trigger_last_press = trigger_last_press;
+			detection_state.trigger_last_release = trigger_last_release;
+			detection_state.twoplayer_fix = twoplayer_fix;
+
+			GameDetectionResult detection_result = DetectGameEvents(detection_state, timestamp);
+
+			// Copy the modified state back to our instance variables
+			last_ammo = detection_state.last_ammo;
+			last_life = detection_state.last_life;
+			last_weapon = detection_state.last_weapon;
+			twoplayer_fix = detection_state.twoplayer_fix;
+			trigger_last_press = detection_state.trigger_last_press;
+			trigger_last_release = detection_state.trigger_last_release;
+
+			// Extract the signal for processing
+			std::string output_signal = detection_result.output_signal;
+
+			bool do_recoil = false;
+			if (output_signal != "")
+			{
+				if (port == 0)
+				{
+					Console.WriteLn("GUN A : %s", output_signal.c_str());
+				}
+				if (port == 1)
+				{
+					Console.WriteLn("GUN B : %s", output_signal.c_str());
+				}
+				if (output_signal == "gunshot")
+				{
+					next_gun_shot = 0;
+					full_auto_delay = 0;
+					queue_size_gunshot = 0;
+					multishot_delay = 0;
+					do_recoil = true;
+				}
+				if (output_signal.starts_with("multishot:"))
+				{
+					size_t first_colon_pos = output_signal.find(':');
+					size_t second_colon_pos = output_signal.find(':', first_colon_pos + 1);
+
+					std::string num1_str = output_signal.substr(first_colon_pos + 1, second_colon_pos - first_colon_pos - 1);
+					std::string num2_str = output_signal.substr(second_colon_pos + 1);
+
+					int number_of_shot = std::stoi(num1_str);
+					int delay_shot = std::stoi(num2_str);
+
+					Console.WriteLn("MULTISHOT DELAY = %d", delay_shot);
+
+
+					delay_shot *= 1000;
+					next_gun_shot = timestamp + delay_shot;
+					full_auto_delay = 0;
+					queue_size_gunshot = number_of_shot - 1;
+					multishot_delay = delay_shot;
+					do_recoil = true;
+				}
+				if (output_signal.starts_with("machinegun_on:"))
+				{
+					size_t colon_pos = output_signal.find(':');
+					std::string value_str = output_signal.substr(colon_pos + 1);
+					int delay_shot = std::stoi(value_str);
+
+					delay_shot *= 1000;
+					next_gun_shot = timestamp + delay_shot;
+					full_auto_delay = delay_shot;
+					queue_size_gunshot = 0;
+					delay_shot = 0;
+					do_recoil = true;
+				}
+				if (output_signal == "machinegun_off")
+				{
+					int delay_shot;
+					next_gun_shot = 0;
+					full_auto_delay = 0;
+				}
+				if (output_signal == "life")
+				{
+					if (serial_port != INVALID_HANDLE_VALUE)
+					{
+						GunCon2State::SendComMessage("F1x1x");
+						// Set up delayed F1x0x signal (500ms delay)
+						next_life_signal_off = timestamp + 500000; // 500ms in microseconds
+						life_signal_pending = true;
+					}
+				}
+			}
+			else
+			{
+				if (queue_size_gunshot > 0 && timestamp > next_gun_shot)
+				{
+					do_recoil = true;
+					queue_size_gunshot--;
+					if (queue_size_gunshot > 0)
+					{
+						next_gun_shot = timestamp + multishot_delay;
+					}
+				}
+				if (full_auto_delay > 0 && timestamp > next_gun_shot)
+				{
+					do_recoil = true;
+					next_gun_shot = timestamp + full_auto_delay;
+				}
+			}
+
+			// Handle delayed life signal off
+			if (life_signal_pending && timestamp > next_life_signal_off)
+			{
+				if (serial_port != INVALID_HANDLE_VALUE)
+				{
+					GunCon2State::SendComMessage("F1x0x");
+				}
+				life_signal_pending = false;
+			}
+
+			// Handle delayed recoil signal off
+			if (recoil_signal_pending && timestamp > next_recoil_signal_off)
+			{
+				if (serial_port != INVALID_HANDLE_VALUE)
+				{
+					GunCon2State::SendComMessage("F0x0x"); // Turn recoil OFF
+				}
+				recoil_signal_pending = false;
+			}
+
+			if (do_recoil)
+			{
+				long long diff_gunshot = timestamp - last_gun_shot;
+				last_gun_shot = timestamp;
+
+				if (port == 0)
+				{
+					Console.WriteLn("GUN A : SHOT (%lld)", diff_gunshot);
+				}
+				if (port == 1)
+				{
+					Console.WriteLn("GUN B : SHOT (%lld)", diff_gunshot);
+				}
+
+				if (full_auto_delay > 0)
+				{
+					// Machine gun - use pulse system for rapid fire
+					GunCon2State::SendComMessage("F0x2x10x");
+				}
+				else if (queue_size_gunshot > 0)
+				{
+					// Multishot - use pulse system
+				 	GunCon2State::SendComMessage("F0x2x3x");
+				}
+				else
+				{
+					// Single shot - use toggle system with 45ms delay
+					if (serial_port != INVALID_HANDLE_VALUE)
+					{
+						GunCon2State::SendComMessage("F0x1x"); // Turn recoil ON
+						next_recoil_signal_off = timestamp + 45000; // 45ms in microseconds
+						recoil_signal_pending = true;
+					}
+				}
+
+				//// Send ammo count
+				//if (serial_port != INVALID_HANDLE_VALUE)
+				//{
+				//	Console.WriteLn(fmt::format("GUN {} : AMMO ({})", port + 1, last_ammo));
+				//	GunCon2State::SendComMessage(fmt::format("FDAx{}xxx", last_ammo));
+				//}
+			}
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		if (serial_port != INVALID_HANDLE_VALUE)
+		{
+			GunCon2State::SendComMessage("E", "");
+			CloseHandle(serial_port);
+		}
+			serial_port = INVALID_HANDLE_VALUE;
+		Console.WriteLn("THREAD : Thread stop");
+	}
+
+	void GunCon2State::ThreadAutoConfigure()
+	{
+
+		std::vector<std::string> liste_ids_recoil = {
+			"SLES-50930", "SLES-51095", "SLUS-20485", "SLUS-20389", "SLPM-65139",
+			"SLES-52620", "SLES-51289", "SLPS-25165", "SLUS-20492", "SLES-50650",
+			"SLUS-20669", "SLES-51617", "SLUS-20619", "SCES-50300", "SLUS-20219",
+			"SCES-51844", "SLUS-20645", "SLUS-20927", "SLUS-20221", "SLES-51229"
+		};
+
+
+		int i = 0;
+		while (thread_output_loaded == false)
+		{
+			if (quit_thread)
+				return;
+			if (i < 50)
+			{
+				i++;
+			}
+			else
+			{
+				Console.WriteLn("ThreadLOAD INIT");
+				std::string serial = VMManager::GetDiscSerial();
+				if (serial != "" && active_game == "" && VMManager::HasValidVM())
+				{
+					active_game = serial;
+
+					bool id_present = false;
+					for (const std::string& id : liste_ids_recoil)
+					{
+						if (id == active_game)
+						{
+							id_present = true;
+							break;
+						}
+					}
+					if (id_present == false)
+						return;
+
+					recoil_output_thread = new std::thread(&GunCon2State::ThreadOutputs, this);
+					//AutoConfigure();
+					return;
+				}			
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+
 	}
 
 	void GunCon2State::AutoConfigure()
@@ -375,6 +758,141 @@ namespace usb_lightgun
 			(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() : InputManager::GetPointerAbsolutePosition(0);
 		GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
 
+		//Apply aim adjustement for 2 players TimeCrisis if Widescreen on
+		float pointer_x2 = pointer_x;
+		float pointer_y2 = pointer_y;
+		if ((active_game == "SLUS-20219" || active_game == "SCES-50300" || active_game == "SCES-51844" || active_game == "SLUS-20645") && twoplayer_fix)// && EmuConfig.CurrentAspectRatio == AspectRatioType::R16_9)
+		{
+			if (active_game == "SLUS-20219")
+			{
+				if (port == 0)
+				{
+					float min = 0.035;
+					float max = 0.9035;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.25;
+					max = 0.69;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
+				}
+				if (port == 1)
+				{
+					float min = 0.093;
+					float max = 0.970;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
+				}
+			}
+			if (active_game == "SCES-50300")
+			{
+				if (port == 0)
+				{
+					float min = 0.02798462;
+					float max = 0.90;
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.25;
+					max = 0.6950202;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
+				}
+				if (port == 1)
+				{
+					float min = 0.093;
+					float max = 0.970;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
+				}
+			}
+
+			if (active_game == "SCES-51844")
+			{
+				if (port == 0)
+				{
+					float min = 0.035;
+					float max = 0.9035;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.0;
+				}
+				if (port == 1)
+				{
+
+					float min = 0.095;
+					float max = 0.97;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.0;
+				}
+			}
+
+			if (active_game == "SLUS-20645")
+			{
+				if (port == 0)
+				{
+					float min = 0.035;
+					float max = 0.9035;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.1;
+				}
+				if (port == 1)
+				{
+
+					float min = 0.095;
+					float max = 0.97;
+
+					pointer_x = (pointer_x * (max - min)) + min;
+
+					min = 0.247;
+					max = 0.690;
+
+					pointer_y = (pointer_y * (max - min)) + min;
+
+					if (pointer_y > 0 && pointer_y < 1)
+						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.1;
+				}
+			}
+		}
 		s16 pos_x, pos_y;
 		if (pointer_x < 0.0f || pointer_y < 0.0f)
 		{
@@ -488,6 +1006,7 @@ namespace usb_lightgun
 		GunCon2State* s = USB_CONTAINER_OF(dev, GunCon2State, dev);
 
 		s->custom_config = USB::GetConfigBool(si, s->port, TypeName(), "custom_config", false);
+		s->lightgun_com_port = USB::GetConfigInt(si, s->port, TypeName(), "lightgun_port", 0);
 
 		// Don't override auto config if we've set it.
 		if (!s->auto_config_done || s->custom_config)
@@ -620,6 +1139,9 @@ namespace usb_lightgun
 				TRANSLATE_NOOP("USB", "Applies a color to the chosen crosshair images, can be used for multiple "
 									  "players. Specify in HTML/CSS format (e.g. #aabbcc)"),
 				"#ffffff"},
+			{SettingInfo::Type::Integer, "lightgun_port", TRANSLATE_NOOP("USB", "Lightgun COM port"),
+				TRANSLATE_NOOP("USB", "COM port to enable recoil and ammo count, 0=disabled"), "0", "0", "99", "1", TRANSLATE_NOOP("USB", "%d COM"),
+				nullptr, nullptr, 1.0f},
 			{SettingInfo::Type::Boolean, "custom_config", TRANSLATE_NOOP("USB", "Manual Screen Configuration"),
 				TRANSLATE_NOOP("USB",
 					"Forces the use of the screen parameters below, instead of automatic parameters if available."),

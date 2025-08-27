@@ -193,6 +193,7 @@ namespace usb_lightgun
 		bool full_auto_active = false;
 		bool twoplayer_fix = false;
 		int lightgun_com_port = 0;
+		bool gamepad_mode = false;
 		HANDLE serial_port;
 
 		void AutoConfigure();
@@ -383,7 +384,7 @@ namespace usb_lightgun
 		{
 			if (serial_port != INVALID_HANDLE_VALUE)
 			{
-				GunCon2State::SendComMessage("E");
+				GunCon2State::SendComMessage("E", "");
 				CloseHandle(serial_port);
 				serial_port = INVALID_HANDLE_VALUE;
 			}
@@ -468,6 +469,10 @@ namespace usb_lightgun
 			if (valid_com)
 			{
 				GunCon2State::SendComMessage("Sx");
+				if (gamepad_mode)
+				{
+					GunCon2State::SendComMessage("M0x1");
+				}
 			}
 			else
 			{
@@ -998,6 +1003,7 @@ namespace usb_lightgun
 
 		s->custom_config = USB::GetConfigBool(si, s->port, TypeName(), "custom_config", false);
 		s->lightgun_com_port = USB::GetConfigInt(si, s->port, TypeName(), "lightgun_port", 0);
+		s->gamepad_mode = USB::GetConfigBool(si, s->port, TypeName(), "gamepad_mode", false);
 
 		// Don't override auto config if we've set it.
 		if (!s->auto_config_done || s->custom_config)
@@ -1133,6 +1139,8 @@ namespace usb_lightgun
 			{SettingInfo::Type::Integer, "lightgun_port", TRANSLATE_NOOP("USB", "Lightgun COM port"),
 				TRANSLATE_NOOP("USB", "COM port to enable recoil and ammo count, 0=disabled"), "0", "0", "99", "1", TRANSLATE_NOOP("USB", "%d COM"),
 				nullptr, nullptr, 1.0f},
+			{SettingInfo::Type::Boolean, "gamepad_mode", TRANSLATE_NOOP("USB", "Gamepad Mode"),
+				TRANSLATE_NOOP("USB", "If enabled switches the lightgun to gamepad mode"), },
 			{SettingInfo::Type::Boolean, "custom_config", TRANSLATE_NOOP("USB", "Manual Screen Configuration"),
 				TRANSLATE_NOOP("USB",
 					"Forces the use of the screen parameters below, instead of automatic parameters if available."),

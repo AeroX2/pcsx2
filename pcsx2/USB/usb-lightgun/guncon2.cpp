@@ -131,6 +131,13 @@ namespace usb_lightgun
 		explicit GunCon2State(u32 port_);
 		~GunCon2State();
 		void SendComMessage(const std::string& message, const std::string& end_line = "\r\n");
+		bool IsSerialPortValid() const {
+#ifdef _WIN32
+			return serial_port != INVALID_HANDLE_VALUE;
+#else
+			return serial_port != -1;
+#endif
+		}
 		USBDevice dev{};
 		USBDesc desc{};
 		USBDescDevice desc_dev{};
@@ -667,13 +674,12 @@ namespace usb_lightgun
 				}
 				if (output_signal == "machinegun_off")
 				{
-					int delay_shot;
 					next_gun_shot = 0;
 					full_auto_delay = 0;
 				}
 				if (output_signal == "life")
 				{
-					if (serial_port != INVALID_HANDLE_VALUE)
+					if (IsSerialPortValid())
 					{
 						GunCon2State::SendComMessage("F1x1x");
 						// Set up delayed F1x0x signal (500ms delay)
@@ -703,7 +709,7 @@ namespace usb_lightgun
 			// Handle delayed life signal off
 			if (life_signal_pending && timestamp > next_life_signal_off)
 			{
-				if (serial_port != INVALID_HANDLE_VALUE)
+				if (IsSerialPortValid())
 				{
 					GunCon2State::SendComMessage("F1x0x");
 				}
@@ -713,7 +719,7 @@ namespace usb_lightgun
 			// Handle delayed recoil signal off
 			if (recoil_signal_pending && timestamp > next_recoil_signal_off)
 			{
-				if (serial_port != INVALID_HANDLE_VALUE)
+				if (IsSerialPortValid())
 				{
 					GunCon2State::SendComMessage("F0x0x"); // Turn recoil OFF
 				}
@@ -747,7 +753,7 @@ namespace usb_lightgun
 				else
 				{
 					// Single shot - use toggle system with 45ms delay
-					if (serial_port != INVALID_HANDLE_VALUE)
+					if (IsSerialPortValid())
 					{
 						GunCon2State::SendComMessage("F0x1x"); // Turn recoil ON
 						next_recoil_signal_off = timestamp + 45000; // 45ms in microseconds
@@ -866,7 +872,6 @@ namespace usb_lightgun
 		GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
 
 		//Apply aim adjustement for 2 players TimeCrisis if Widescreen on
-		float pointer_x2 = pointer_x;
 		float pointer_y2 = pointer_y;
 		if ((active_game == "SLUS-20219" || active_game == "SCES-50300" || active_game == "SCES-51844" || active_game == "SLUS-20645") && twoplayer_fix)// && EmuConfig.CurrentAspectRatio == AspectRatioType::R16_9)
 		{

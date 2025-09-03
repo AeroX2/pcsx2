@@ -18,7 +18,14 @@
 #include "common/StringUtil.h"
 
 #include <tuple>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+#include <cstring>
+#endif
 #include "Memory.h"
 
 namespace usb_lightgun
@@ -194,7 +201,11 @@ namespace usb_lightgun
 		bool twoplayer_fix = false;
 		int lightgun_com_port = 0;
 		bool gamepad_mode = false;
+#ifdef _WIN32
 		HANDLE serial_port;
+#else
+		int serial_port;
+#endif
 
 		void AutoConfigure();
 
@@ -375,6 +386,11 @@ namespace usb_lightgun
 	GunCon2State::GunCon2State(u32 port_)
 		: port(port_)
 	{
+#ifdef _WIN32
+		serial_port = INVALID_HANDLE_VALUE;
+#else
+		serial_port = -1;
+#endif
 		auto_config_thread = new std::thread(&GunCon2State::ThreadAutoConfigure, this);
 	}
 
@@ -382,12 +398,21 @@ namespace usb_lightgun
 	{
 		if (recoil_output_thread != nullptr)
 		{
+#ifdef _WIN32
 			if (serial_port != INVALID_HANDLE_VALUE)
 			{
 				GunCon2State::SendComMessage("E", "");
 				CloseHandle(serial_port);
 				serial_port = INVALID_HANDLE_VALUE;
 			}
+#else
+			if (serial_port != -1)
+			{
+				GunCon2State::SendComMessage("E", "");
+				close(serial_port);
+				serial_port = -1;
+			}
+#endif
 			active_game = "";
 			quit_thread = true;
 			recoil_output_thread->join();
@@ -405,6 +430,7 @@ namespace usb_lightgun
 
 	void GunCon2State::SendComMessage(const std::string& message, const std::string& end_line)
 	{
+#ifdef _WIN32
 		if (serial_port != INVALID_HANDLE_VALUE)
 		{
 			DWORD bytes_written;
@@ -413,6 +439,15 @@ namespace usb_lightgun
 			WriteFile(serial_port, message_with_crlf.c_str(), message_length, &bytes_written, NULL);
 			FlushFileBuffers(serial_port);
 		}
+#else
+		if (serial_port != -1)
+		{
+			const std::string message_with_crlf = message + end_line;
+			ssize_t bytes_written = write(serial_port, message_with_crlf.c_str(), message_with_crlf.length());
+			(void)bytes_written; // Avoid unused variable warning
+			fsync(serial_port);
+		}
+#endif
 	}
 
 	void GunCon2State::ThreadOutputs()
@@ -426,6 +461,7 @@ namespace usb_lightgun
 			if (lightgun_com_port > 0)
 			{
 				valid_com = true;
+#ifdef _WIN32
 				std::string serial_portName = "COM" + std::to_string(lightgun_com_port);
 				if (lightgun_com_port >= 10)
 				{
@@ -465,6 +501,63 @@ namespace usb_lightgun
 						valid_com = false;
 					}
 				}
+#else
+				std::string serial_portName = "/dev/ttyS" + std::to_string(lightgun_com_port - 1);
+				// Also try USB serial ports
+				if (access(serial_portName.c_str(), F_OK) != 0)
+				{
+					serial_portName = "/dev/ttyUSB" + std::to_string(lightgun_com_port - 1);
+				}
+				if (access(serial_portName.c_str(), F_OK) != 0)
+				{
+					serial_portName = "/dev/ttyACM" + std::to_string(lightgun_com_port - 1);
+				}
+
+				serial_port = open(serial_portName.c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK);
+
+				if (serial_port == -1)
+				{
+					valid_com = false;
+				}
+				else
+				{
+					struct termios tty;
+					memset(&tty, 0, sizeof(tty));
+					
+					if (tcgetattr(serial_port, &tty) != 0)
+					{
+						valid_com = false;
+					}
+					else
+					{
+						// Set baud rate to 9600
+						cfsetospeed(&tty, B9600);
+						cfsetispeed(&tty, B9600);
+						
+						// 8 bits, no parity, 1 stop bit
+						tty.c_cflag &= ~PARENB; // No parity
+						tty.c_cflag &= ~CSTOPB; // 1 stop bit
+						tty.c_cflag &= ~CSIZE;
+						tty.c_cflag |= CS8; // 8 data bits
+						tty.c_cflag &= ~CRTSCTS; // No hardware flow control
+						tty.c_cflag |= CREAD | CLOCAL; // Enable reading and ignore ctrl lines
+						
+						// Raw mode
+						tty.c_lflag &= ~(ICANON | ECHO | ECHOE | ECHONL | ISIG | IEXTEN);
+						tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
+						tty.c_oflag &= ~OPOST;
+						
+						// Set timeouts for non-blocking behavior
+						tty.c_cc[VTIME] = 5; // 0.5 second timeout
+						tty.c_cc[VMIN] = 0;  // Return immediately
+						
+						if (tcsetattr(serial_port, TCSANOW, &tty) != 0)
+						{
+							valid_com = false;
+						}
+					}
+				}
+#endif
 			}
 			if (valid_com)
 			{
@@ -476,7 +569,11 @@ namespace usb_lightgun
 			}
 			else
 			{
+#ifdef _WIN32
 				serial_port = INVALID_HANDLE_VALUE;
+#else
+				serial_port = -1;
+#endif
 			}
 		}
 
@@ -668,12 +765,21 @@ namespace usb_lightgun
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
+#ifdef _WIN32
 		if (serial_port != INVALID_HANDLE_VALUE)
 		{
 			GunCon2State::SendComMessage("E", "");
 			CloseHandle(serial_port);
 		}
-			serial_port = INVALID_HANDLE_VALUE;
+		serial_port = INVALID_HANDLE_VALUE;
+#else
+		if (serial_port != -1)
+		{
+			GunCon2State::SendComMessage("E", "");
+			close(serial_port);
+		}
+		serial_port = -1;
+#endif
 		Console.WriteLn("THREAD : Thread stop");
 	}
 

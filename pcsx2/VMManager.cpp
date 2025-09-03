@@ -1117,6 +1117,7 @@ void VMManager::UpdateDiscDetails(bool booting)
 		FileMcd_Reopen(memcardFilters.empty() ? s_disc_serial : memcardFilters);
 	}
 
+	#ifdef _WIN32
 	std::string exePath = FileSystem::GetProgramPath();
 	size_t found = exePath.find_last_of("\\");
 	if (found != std::string::npos)
@@ -1137,6 +1138,7 @@ void VMManager::UpdateDiscDetails(bool booting)
 			}
 		}
 	}
+	#endif
 }
 
 void VMManager::ClearDiscDetails()

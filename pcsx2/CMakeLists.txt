@@ -381,6 +381,7 @@ set(pcsx2USBSources
 	USB/usb-eyetoy/usb-eyetoy-webcam.cpp
 	USB/usb-hid/usb-hid.cpp
 	USB/usb-lightgun/guncon2.cpp
+	USB/usb-lightgun/game_detection.cpp
 	USB/usb-mic/audiodev-cubeb.cpp
 	USB/usb-mic/usb-headset.cpp
 	USB/usb-mic/usb-mic.cpp
@@ -417,6 +418,7 @@ set(pcsx2USBHeaders
 	USB/usb-eyetoy/videodev.h
 	USB/usb-hid/usb-hid.h
 	USB/usb-lightgun/guncon2.h
+	USB/usb-lightgun/game_detection.h
 	USB/usb-mic/audio.h
 	USB/usb-mic/audiodev-cubeb.h
 	USB/usb-mic/audiodev-noop.h

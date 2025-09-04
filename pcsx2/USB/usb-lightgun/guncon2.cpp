@@ -1035,8 +1035,8 @@ namespace usb_lightgun
 			}
 
 			// 0,0 is reserved for offscreen, so ensure we don't send that
-			pos_x = static_cast<s16>(std::max(x, 1));
-			pos_y = static_cast<s16>(std::max(y, 1));
+			pos_x = static_cast<s16>((std::max)(x, 1));
+			pos_y = static_cast<s16>((std::max)(y, 1));
 		}
 
 		return std::tie(pos_x, pos_y);

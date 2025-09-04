@@ -18,6 +18,8 @@
 #include "common/StringUtil.h"
 
 #include <tuple>
+#include <thread>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -509,18 +511,8 @@ namespace usb_lightgun
 					}
 				}
 #else
-				std::string serial_portName = "/dev/ttyS" + std::to_string(lightgun_com_port - 1);
-				// Also try USB serial ports
-				if (access(serial_portName.c_str(), F_OK) != 0)
-				{
-					serial_portName = "/dev/ttyUSB" + std::to_string(lightgun_com_port - 1);
-				}
-				if (access(serial_portName.c_str(), F_OK) != 0)
-				{
-					serial_portName = "/dev/ttyACM" + std::to_string(lightgun_com_port - 1);
-				}
-
-				serial_port = open(serial_portName.c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK);
+				std::string serial_port_name = "/dev/ttyACM" + std::to_string(lightgun_com_port - 1);
+				serial_port = open(serial_port_name.c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK);
 
 				if (serial_port == -1)
 				{

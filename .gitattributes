@@ -6,3 +6,6 @@
 *.props text eol=crlf
 *.vcxproj text eol=crlf
 *.vcxproj.filters text eol=crlf
+
+# Preserve vendored ManyMouse sources exactly as upstream.
+3rdparty/manymouse/** -whitespace

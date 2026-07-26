@@ -3,6 +3,7 @@
 
 #include "ImGui/ImGuiManager.h"
 #include "Input/InputManager.h"
+#include "Input/ManyMouseInputSource.h"
 #include "Input/InputSource.h"
 #include "SIO/Pad/Pad.h"
 #include "SIO/Sio.h"
@@ -770,8 +771,12 @@ std::optional<InputBindingKey> InputManager::ParseHostKeyboardKey(const std::str
 
 std::optional<InputBindingKey> InputManager::ParsePointerKey(const std::string_view source, const std::string_view sub_binding)
 {
+	if (!source.starts_with("Pointer-"))
+		return std::nullopt;
+
 	const std::optional<s32> pointer_index = StringUtil::FromChars<s32>(source.substr(8));
-	if (!pointer_index.has_value() || pointer_index.value() < 0)
+	if (!pointer_index.has_value() || pointer_index.value() < 0 ||
+		pointer_index.value() >= static_cast<s32>(MAX_POINTER_DEVICES))
 		return std::nullopt;
 
 	InputBindingKey key = {};
@@ -827,7 +832,8 @@ std::optional<u32> InputManager::GetIndexFromPointerBinding(const std::string_vi
 		return std::nullopt;
 
 	const std::optional<s32> pointer_index = StringUtil::FromChars<s32>(source.substr(8));
-	if (!pointer_index.has_value() || pointer_index.value() < 0)
+	if (!pointer_index.has_value() || pointer_index.value() < 0 ||
+		pointer_index.value() >= static_cast<s32>(MAX_POINTER_DEVICES))
 		return std::nullopt;
 
 	return static_cast<u32>(pointer_index.value());
@@ -1394,12 +1400,18 @@ void InputManager::GenerateRelativeMouseEvents()
 
 std::pair<float, float> InputManager::GetPointerAbsolutePosition(u32 index)
 {
+	if (index >= MAX_POINTER_DEVICES)
+		return {};
+
 	return std::make_pair(s_host_pointer_positions[index][static_cast<u8>(InputPointerAxis::X)],
 		s_host_pointer_positions[index][static_cast<u8>(InputPointerAxis::Y)]);
 }
 
 void InputManager::UpdatePointerAbsolutePosition(u32 index, float x, float y)
 {
+	if (index >= MAX_POINTER_DEVICES)
+		return;
+
 	const float dx = x - std::exchange(s_host_pointer_positions[index][static_cast<u8>(InputPointerAxis::X)], x);
 	const float dy = y - std::exchange(s_host_pointer_positions[index][static_cast<u8>(InputPointerAxis::Y)], y);
 
@@ -1412,10 +1424,15 @@ void InputManager::UpdatePointerAbsolutePosition(u32 index, float x, float y)
 
 	if (index == 0)
 		ImGuiManager::UpdateMousePosition(x, y);
+	else
+		ImGuiManager::SetSoftwareCursorPosition(index, x, y);
 }
 
 void InputManager::UpdatePointerRelativeDelta(u32 index, InputPointerAxis axis, float d, bool raw_input)
 {
+	if (index >= MAX_POINTER_DEVICES)
+		return;
+
 	s_host_pointer_positions[index][static_cast<u8>(axis)] += d;
 	s_pointer_state[index][static_cast<u8>(axis)].delta.fetch_add(static_cast<s32>(d * 65536.0f), std::memory_order_release);
 
@@ -1671,7 +1688,7 @@ void InputManager::UpdateHostMouseMode()
 
 bool InputManager::ReloadDevices()
 {
-	bool changed = false;
+	bool changed = ReloadManyMouseDevices();
 
 	for (u32 i = FIRST_EXTERNAL_INPUT_SOURCE; i < LAST_EXTERNAL_INPUT_SOURCE; i++)
 	{
@@ -1684,6 +1701,8 @@ bool InputManager::ReloadDevices()
 
 void InputManager::CloseSources()
 {
+	CloseManyMouseSource();
+
 	for (u32 i = FIRST_EXTERNAL_INPUT_SOURCE; i < LAST_EXTERNAL_INPUT_SOURCE; i++)
 	{
 		if (s_input_sources[i] && s_input_sources[i]->IsInitialized())
@@ -1696,6 +1715,8 @@ void InputManager::CloseSources()
 
 void InputManager::PollSources()
 {
+	PollManyMouseSource();
+
 	for (u32 i = FIRST_EXTERNAL_INPUT_SOURCE; i < LAST_EXTERNAL_INPUT_SOURCE; i++)
 	{
 		if (s_input_sources[i]->IsInitialized())
@@ -1715,6 +1736,11 @@ std::vector<std::pair<std::string, std::string>> InputManager::EnumerateDevices(
 
 	ret.emplace_back("Keyboard", "Keyboard");
 	ret.emplace_back("Mouse", "Mouse");
+	for (u32 i = 0; i < GetManyMouseDeviceCount(); i++)
+	{
+		ret.emplace_back(GetPointerDeviceName(i + MANYMOUSE_POINTER_OFFSET),
+			fmt::format("{} (ManyMouse)", GetManyMouseDeviceName(i)));
+	}
 
 	for (u32 i = FIRST_EXTERNAL_INPUT_SOURCE; i < LAST_EXTERNAL_INPUT_SOURCE; i++)
 	{
@@ -1854,6 +1880,9 @@ void InputManager::UpdateInputSourceState(SettingsInterface& si, std::unique_loc
 
 void InputManager::ReloadSources(SettingsInterface& si, std::unique_lock<std::mutex>& settings_lock)
 {
+	const bool has_guncon2 = (USB::GetConfigDevice(si, 0) == "guncon2" || USB::GetConfigDevice(si, 1) == "guncon2");
+	UpdateManyMouseSource(has_guncon2);
+
 	UpdateInputSourceState<SDLInputSource>(si, settings_lock, InputSourceType::SDL);
 #ifdef _WIN32
 	UpdateInputSourceState<DInputSource>(si, settings_lock, InputSourceType::DInput);

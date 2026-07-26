@@ -1316,6 +1316,27 @@
     <ClCompile Include="Input\InputManager.cpp">
       <Filter>Misc\Input</Filter>
     </ClCompile>
+    <ClCompile Include="Input\ManyMouseInputSource.cpp">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\linux_evdev.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\macosx_hidmanager.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\macosx_hidutilities.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\manymouse.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\windows_wminput.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="..\3rdparty\manymouse\x11_xinput2.c">
+      <Filter>Misc\Input</Filter>
+    </ClCompile>
     <ClCompile Include="Input\DInputSource.cpp">
       <Filter>Misc\Input</Filter>
     </ClCompile>
@@ -2186,6 +2207,12 @@
     </ClInclude>
     <ClInclude Include="USB\usb-lightgun\guncon2.h">
       <Filter>System\Ps2\USB\usb-lightgun</Filter>
+    </ClInclude>
+    <ClInclude Include="Input\ManyMouseInputSource.h">
+      <Filter>Misc\Input</Filter>
+    </ClInclude>
+    <ClInclude Include="..\3rdparty\manymouse\manymouse.h">
+      <Filter>Misc\Input</Filter>
     </ClInclude>
     <ClInclude Include="StateWrapper.h">
       <Filter>System</Filter>

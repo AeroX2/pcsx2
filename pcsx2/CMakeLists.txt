@@ -857,11 +857,13 @@ set(pcsx2ImGuiHeaders
 
 set(pcsx2InputSources
 	Input/InputManager.cpp
+	Input/ManyMouseInputSource.cpp
 	Input/InputSource.cpp
 	Input/SDLInputSource.cpp
 )
 set(pcsx2InputHeaders
 	Input/InputManager.h
+	Input/ManyMouseInputSource.h
 	Input/InputSource.h
 	Input/SDLInputSource.h
 )
@@ -1151,6 +1153,7 @@ endif()
 target_link_libraries(PCSX2_FLAGS INTERFACE
 	common
 	imgui
+	manymouse
 	fmt::fmt
 	libchdr
 	libzip::zip

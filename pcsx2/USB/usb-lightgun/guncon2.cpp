@@ -3,9 +3,11 @@
 
 #include "GS/GS.h"
 #include "Host.h"
+#include "IconsFontAwesome.h"
 #include "IconsPromptFont.h"
 #include "ImGui/ImGuiManager.h"
 #include "Input/InputManager.h"
+#include "Input/ManyMouseInputSource.h"
 #include "StateWrapper.h"
 #include "USB/USB.h"
 #include "USB/deviceproxy.h"
@@ -18,8 +20,11 @@
 #include "common/Console.h"
 #include "common/StringUtil.h"
 
+#include <filesystem>
+#include <optional>
 #include <tuple>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -59,7 +64,56 @@ namespace usb_lightgun
 		BID_RELATIVE_RIGHT = 19,
 		BID_RELATIVE_UP = 20,
 		BID_RELATIVE_DOWN = 21,
+		BID_POINTER_X = 22,
 	};
+
+	static std::vector<std::string> GetDetectedSerialPorts()
+	{
+		std::vector<std::string> ports;
+#ifdef _WIN32
+		for (u32 port = 1; port <= 99; port++)
+		{
+			const std::string name = fmt::format("COM{}", port);
+			char target[512];
+			if (QueryDosDeviceA(name.c_str(), target, std::size(target)) != 0)
+				ports.push_back(name);
+		}
+#else
+		std::error_code ec;
+		for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator("/dev", ec))
+		{
+			if (ec)
+				break;
+
+			const std::string name = entry.path().filename().string();
+			if (name.starts_with("ttyACM") || name.starts_with("ttyUSB"))
+				ports.push_back(entry.path().string());
+		}
+		std::sort(ports.begin(), ports.end());
+#endif
+		return ports;
+	}
+
+	static std::optional<std::string> ResolveSerialPort(int setting, u32 guncon_port)
+	{
+		if (setting < 0)
+			return std::nullopt;
+
+		if (setting > 0)
+		{
+#ifdef _WIN32
+			return fmt::format("COM{}", setting);
+#else
+			return fmt::format("/dev/ttyACM{}", setting - 1);
+#endif
+		}
+
+		const std::vector<std::string> detected_ports = GetDetectedSerialPorts();
+		if (guncon_port >= detected_ports.size())
+			return std::nullopt;
+
+		return detected_ports[guncon_port];
+	}
 
 	// Right pain in the arse. Different games seem to have different scales..
 	// Not worth putting these in the gamedb for such few games.
@@ -136,7 +190,8 @@ namespace usb_lightgun
 	{
 		explicit GunCon2State(u32 port_);
 		~GunCon2State();
-		void SendComMessage(const std::string& message, const std::string& end_line = "\r\n");
+		bool SendComMessage(const std::string& message, const std::string& end_line = "\r\n");
+		void ShowSerialWarning(const std::string_view message);
 		bool IsSerialPortValid() const
 		{
 #ifdef _WIN32
@@ -156,6 +211,7 @@ namespace usb_lightgun
 		//////////////////////////////////////////////////////////////////////////
 		bool has_relative_binds = false;
 		bool custom_config = false;
+		u32 pointer_index = 0;
 		u32 screen_width = 640;
 		u32 screen_height = 240;
 		float center_x = 320;
@@ -213,8 +269,10 @@ namespace usb_lightgun
 		u32 last_other2 = 0;
 		bool full_auto_active = false;
 		bool twoplayer_fix = false;
-		int lightgun_com_port = 0;
+		int serial_port_setting = 0;
 		bool gamepad_mode = false;
+		bool serial_write_error_reported = false;
+		std::string active_serial_port_name;
 #ifdef _WIN32
 		HANDLE serial_port;
 #else
@@ -441,26 +499,42 @@ namespace usb_lightgun
 		Console.WriteLn("NIXX : GunCon2State -> Destroy");
 	}
 
-	void GunCon2State::SendComMessage(const std::string& message, const std::string& end_line)
+	void GunCon2State::ShowSerialWarning(const std::string_view message)
 	{
+		Console.Warning("(GunCon2) %.*s", static_cast<int>(message.size()), message.data());
+		Host::AddIconOSDMessage(fmt::format("GunConSerialWarning{}", port), ICON_FA_TRIANGLE_EXCLAMATION,
+			message, Host::OSD_WARNING_DURATION);
+	}
+
+	bool GunCon2State::SendComMessage(const std::string& message, const std::string& end_line)
+	{
+		bool success = false;
 #ifdef _WIN32
 		if (serial_port != INVALID_HANDLE_VALUE)
 		{
-			DWORD bytes_written;
+			DWORD bytes_written = 0;
 			const std::string message_with_crlf = message + end_line;
-			DWORD message_length = (DWORD)message_with_crlf.length();
-			WriteFile(serial_port, message_with_crlf.c_str(), message_length, &bytes_written, NULL);
+			const DWORD message_length = static_cast<DWORD>(message_with_crlf.length());
+			success = (WriteFile(serial_port, message_with_crlf.c_str(), message_length, &bytes_written, nullptr) &&
+					   bytes_written == message_length);
 			FlushFileBuffers(serial_port);
 		}
 #else
 		if (serial_port != -1)
 		{
 			const std::string message_with_crlf = message + end_line;
-			ssize_t bytes_written = write(serial_port, message_with_crlf.c_str(), message_with_crlf.length());
-			(void)bytes_written; // Avoid unused variable warning
+			const ssize_t bytes_written = write(serial_port, message_with_crlf.c_str(), message_with_crlf.length());
+			success = (bytes_written == static_cast<ssize_t>(message_with_crlf.length()));
 			fsync(serial_port);
 		}
 #endif
+		if (!success && IsSerialPortValid() && !serial_write_error_reported)
+		{
+			serial_write_error_reported = true;
+			ShowSerialWarning(fmt::format("GunCon {} could not write to {}. Recoil and rumble feedback may not work.",
+				port + 1, active_serial_port_name.empty() ? "its serial port" : active_serial_port_name));
+		}
+		return success;
 	}
 
 	void GunCon2State::ThreadOutputs()
@@ -471,16 +545,16 @@ namespace usb_lightgun
 		if (active_game != "")
 		{
 			bool valid_com = false;
-			if (lightgun_com_port > 0)
+			const std::optional<std::string> serial_port_name = ResolveSerialPort(serial_port_setting, port);
+			if (serial_port_name.has_value())
 			{
 				valid_com = true;
 #ifdef _WIN32
-				std::string serial_portName = "COM" + std::to_string(lightgun_com_port);
-				if (lightgun_com_port >= 10)
-				{
-					serial_portName = "\\\\.\\COM" + std::to_string(lightgun_com_port);
-				}
-				serial_port = CreateFileA(serial_portName.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+				const std::string open_name =
+					serial_port_name->starts_with("COM") && serial_port_name->size() > 4 ?
+						fmt::format("\\\\.\\{}", *serial_port_name) :
+						*serial_port_name;
+				serial_port = CreateFileA(open_name.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
 					FILE_ATTRIBUTE_NORMAL, NULL);
 
 				if (serial_port == INVALID_HANDLE_VALUE)
@@ -515,8 +589,7 @@ namespace usb_lightgun
 					}
 				}
 #else
-				std::string serial_port_name = "/dev/ttyACM" + std::to_string(lightgun_com_port - 1);
-				serial_port = open(serial_port_name.c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK);
+				serial_port = open(serial_port_name->c_str(), O_WRONLY | O_NOCTTY | O_NONBLOCK);
 
 				if (serial_port == -1)
 				{
@@ -564,7 +637,12 @@ namespace usb_lightgun
 			}
 			if (valid_com)
 			{
-				GunCon2State::SendComMessage("Sx");
+				active_serial_port_name = *serial_port_name;
+				serial_write_error_reported = false;
+				Host::RemoveKeyedOSDMessage(fmt::format("GunConSerialWarning{}", port));
+				Console.WriteLn("(GunCon2) Gun %u using serial feedback on %s.", port + 1, serial_port_name->c_str());
+				GunCon2State::SendComMessage("S0x");
+				GunCon2State::SendComMessage("S1x");
 				if (gamepad_mode)
 				{
 					GunCon2State::SendComMessage("M0x1");
@@ -572,9 +650,21 @@ namespace usb_lightgun
 			}
 			else
 			{
+				if (serial_port_setting >= 0)
+				{
+					const std::string target =
+						serial_port_name.has_value() ? *serial_port_name : fmt::format("automatic port {}", port + 1);
+					ShowSerialWarning(fmt::format(
+						"GunCon {} could not open {}. Check the connection and close other serial applications.",
+						port + 1, target));
+				}
 #ifdef _WIN32
+				if (serial_port != INVALID_HANDLE_VALUE)
+					CloseHandle(serial_port);
 				serial_port = INVALID_HANDLE_VALUE;
 #else
+				if (serial_port != -1)
+					close(serial_port);
 				serial_port = -1;
 #endif
 			}
@@ -862,7 +952,8 @@ namespace usb_lightgun
 	{
 		float pointer_x, pointer_y;
 		const auto& [window_x, window_y] =
-			(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() : InputManager::GetPointerAbsolutePosition(0);
+			(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() :
+								   InputManager::GetPointerAbsolutePosition(pointer_index);
 		GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
 
 		// Apply game-specific two-player aiming corrections for Time Crisis 2 and 3.
@@ -959,7 +1050,7 @@ namespace usb_lightgun
 
 	u32 GunCon2State::GetSoftwarePointerIndex() const
 	{
-		return has_relative_binds ? (InputManager::MAX_POINTER_DEVICES + port) : 0;
+		return has_relative_binds ? (InputManager::MAX_POINTER_DEVICES + port) : pointer_index;
 	}
 
 	void GunCon2State::UpdateSoftwarePointerPosition()
@@ -1021,7 +1112,7 @@ namespace usb_lightgun
 		GunCon2State* s = USB_CONTAINER_OF(dev, GunCon2State, dev);
 
 		s->custom_config = USB::GetConfigBool(si, s->port, TypeName(), "custom_config", false);
-		s->lightgun_com_port = USB::GetConfigInt(si, s->port, TypeName(), "lightgun_port", 0);
+		s->serial_port_setting = USB::GetConfigInt(si, s->port, TypeName(), "lightgun_port", 0);
 		s->gamepad_mode = USB::GetConfigBool(si, s->port, TypeName(), "gamepad_mode", false);
 
 		// Don't override auto config if we've set it.
@@ -1035,8 +1126,23 @@ namespace usb_lightgun
 			s->scale_y = USB::GetConfigFloat(si, s->port, TypeName(), "scale_y", DEFAULT_SCALE_Y) / 100.0f;
 		}
 
-		// Pointer settings.
+		// Pointer settings. Pointer-0 is the combined system cursor; ManyMouse devices begin at Pointer-1.
+		const s32 prev_pointer_index = s->GetSoftwarePointerIndex();
 		const std::string pointer_binding = USB::GetConfigString(si, s->port, TypeName(), "Pointer", "");
+		const std::optional<u32> configured_pointer = InputManager::GetIndexFromPointerBinding(pointer_binding);
+		if (configured_pointer.has_value())
+		{
+			s->pointer_index = configured_pointer.value();
+		}
+		else if (s->port < InputManager::GetManyMouseDeviceCount())
+		{
+			s->pointer_index = s->port + InputManager::MANYMOUSE_POINTER_OFFSET;
+		}
+		else
+		{
+			s->pointer_index = 0;
+		}
+
 		std::string cursor_path(USB::GetConfigString(si, s->port, TypeName(), "cursor_path"));
 		const float cursor_scale = USB::GetConfigFloat(si, s->port, TypeName(), "cursor_scale", 1.0f);
 		u32 cursor_color = 0xFFFFFF;
@@ -1051,8 +1157,6 @@ namespace usb_lightgun
 			if (cursor_color_opt.has_value())
 				cursor_color = cursor_color_opt.value();
 		}
-
-		const s32 prev_pointer_index = s->GetSoftwarePointerIndex();
 
 		s->has_relative_binds = (USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeLeft") ||
 								 USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeRight") ||
@@ -1118,7 +1222,8 @@ namespace usb_lightgun
 	std::span<const InputBindingInfo> GunCon2Device::Bindings(u32 subtype) const
 	{
 		static constexpr const InputBindingInfo bindings[] = {
-			//{"pointer", "Pointer/Aiming", InputBindingInfo::Type::Pointer, BID_POINTER_X, GenericInputBinding::Unknown},
+			{"Pointer", TRANSLATE_NOOP("USB", "Pointer/Aiming"), nullptr, InputBindingInfo::Type::Device, BID_POINTER_X,
+				GenericInputBinding::Unknown},
 			{"Up", TRANSLATE_NOOP("USB", "D-Pad Up"), nullptr, InputBindingInfo::Type::Button, BID_DPAD_UP, GenericInputBinding::DPadUp},
 			{"Down", TRANSLATE_NOOP("USB", "D-Pad Down"), nullptr, InputBindingInfo::Type::Button, BID_DPAD_DOWN, GenericInputBinding::DPadDown},
 			{"Left", TRANSLATE_NOOP("USB", "D-Pad Left"), nullptr, InputBindingInfo::Type::Button, BID_DPAD_LEFT, GenericInputBinding::DPadLeft},
@@ -1158,7 +1263,10 @@ namespace usb_lightgun
 									  "players. Specify in HTML/CSS format (e.g. #aabbcc)"),
 				"#ffffff"},
 			{SettingInfo::Type::Integer, "lightgun_port", TRANSLATE_NOOP("USB", "Lightgun COM port"),
-				TRANSLATE_NOOP("USB", "COM port to enable recoil and ammo count, 0=disabled"), "0", "0", "99", "1", TRANSLATE_NOOP("USB", "%d COM"),
+				TRANSLATE_NOOP("USB",
+					"Serial feedback port. Automatic assigns the first detected port to GunCon 1 and the second to "
+					"GunCon 2. Use -1 to disable, 0 for automatic, or a positive COM port number to override."),
+				"0", "-1", "99", "1", TRANSLATE_NOOP("USB", "%d"),
 				nullptr, nullptr, 1.0f},
 			{
 				SettingInfo::Type::Boolean,

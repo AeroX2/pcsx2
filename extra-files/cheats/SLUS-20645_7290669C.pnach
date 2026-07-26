@@ -1,7 +1,7 @@
 gametitle=Time Crisis 3 USA
 
 //60fps coop
-patch=1,EE,201C9F94,extended,24420002 
+patch=1,EE,201C9F94,extended,24420002
 
 //No flashing
 patch=1,EE,00129330,word,00000000

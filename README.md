@@ -30,13 +30,13 @@ ChangeLog :
 - Build in cheats and configuration to fix some issue, remove some gunflash...
 - Some extra stuff like per game reshade profile, autoload savestate 10 on start, reduce the pause menu size to fill in 4:3 if it's the display mode...
 
-How to use the Recoil : 
+How to use the Recoil :
 
-Two options : 
+Two options :
 - Using Mamehooker, the option to enable it is a checkbox in Options, Interface
 - Using direct GunCon Com control. You can find the option to set the right com port in the advanced option of the guncon device.
 
-List of games with recoil support : 
+List of games with recoil support :
 - SLES-50930 : Dino Stalker (E, English)
 - SLES-51095 : Dino Stalker (E, French)
 - SLUS-20485 : Dino Stalker (USA)
@@ -68,13 +68,13 @@ Can be use to apply per game bezel or use certain effect on a game basis, like f
 (https://github.com/brussell1/Shaders/blob/master/Shaders/EyeAdaption.fx)
 
 
-Other stuff related to pcsx2 : 
+Other stuff related to pcsx2 :
 
 I've made a no-smoke patch for Time Crisis 2 if you want, i do not include it by default, because the smoke is not a bug, so it's up to personal preference.
 https://github.com/nixxou/pcsx2/releases/download/V1.0/optional_NOSMOKE-Patch-TimeCrisis2.zip
 
 
-Don't forget there is HD texture pack for some of the games : 
+Don't forget there is HD texture pack for some of the games :
 
 Resident Evil Dead Aim : https://gbatemp.net/threads/resident-evil-dead-aim-hd-textures.649199/
 

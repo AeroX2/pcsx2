@@ -21,7 +21,7 @@ namespace usb_lightgun
 		long long diff = timestamp - state.trigger_last_press;
 
 		//Dino Stalker (E, English)
-		if (state.active_game == "SLES-50930") 
+		if (state.active_game == "SLES-50930")
 		{
 			if (state.port == 0)
 			{
@@ -43,7 +43,7 @@ namespace usb_lightgun
 				}
 				state.last_ammo = ammo_count;
 			}
-		}		//Dino Stalker (E, French)
+		} //Dino Stalker (E, French)
 		else if (state.active_game == "SLES-51095")
 		{
 			if (state.port == 0)
@@ -569,4 +569,3 @@ namespace usb_lightgun
 		return result;
 	}
 } // namespace usb_lightgun
-

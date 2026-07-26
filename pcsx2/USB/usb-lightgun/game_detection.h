@@ -13,12 +13,12 @@ namespace usb_lightgun
 	{
 		std::string active_game;
 		u32 port;
-		int last_ammo;
-		int last_life;
-		int last_weapon;
-		int last_charged;
-		int last_other1;
-		int last_other2;
+		u32 last_ammo;
+		u32 last_life;
+		u32 last_weapon;
+		u32 last_charged;
+		u32 last_other1;
+		u32 last_other2;
 		bool trigger_is_active;
 		std::chrono::microseconds::rep trigger_last_press;
 		std::chrono::microseconds::rep trigger_last_release;
@@ -31,4 +31,4 @@ namespace usb_lightgun
 	};
 
 	GameDetectionResult DetectGameEvents(GameDetectionState& state, std::chrono::microseconds::rep timestamp);
-}
+} // namespace usb_lightgun

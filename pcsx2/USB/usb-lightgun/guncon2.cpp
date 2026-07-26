@@ -137,7 +137,8 @@ namespace usb_lightgun
 		explicit GunCon2State(u32 port_);
 		~GunCon2State();
 		void SendComMessage(const std::string& message, const std::string& end_line = "\r\n");
-		bool IsSerialPortValid() const {
+		bool IsSerialPortValid() const
+		{
 #ifdef _WIN32
 			return serial_port != INVALID_HANDLE_VALUE;
 #else
@@ -204,12 +205,12 @@ namespace usb_lightgun
 		bool life_signal_pending = false;
 		std::chrono::microseconds::rep next_recoil_signal_off = 0;
 		bool recoil_signal_pending = false;
-		int last_ammo = INT32_MAX;
-		int last_life = INT32_MAX;
-		int last_weapon = 0;
-		int last_charged = 0;
-		int last_other1 = 0;
-		int last_other2 = 0;
+		u32 last_ammo = UINT32_MAX;
+		u32 last_life = UINT32_MAX;
+		u32 last_weapon = 0;
+		u32 last_charged = 0;
+		u32 last_other1 = 0;
+		u32 last_other2 = 0;
 		bool full_auto_active = false;
 		bool twoplayer_fix = false;
 		int lightgun_com_port = 0;
@@ -436,9 +437,8 @@ namespace usb_lightgun
 			auto_config_thread->join();
 		}
 
-		
-		Console.WriteLn("NIXX : GunCon2State -> Destroy");
 
+		Console.WriteLn("NIXX : GunCon2State -> Destroy");
 	}
 
 	void GunCon2State::SendComMessage(const std::string& message, const std::string& end_line)
@@ -502,11 +502,11 @@ namespace usb_lightgun
 						dcb_serial_params.ByteSize = 8;
 						dcb_serial_params.StopBits = ONESTOPBIT;
 						dcb_serial_params.Parity = NOPARITY;
-						
+
 						// Set timeouts for non-blocking behavior
 						COMMTIMEOUTS timeouts = {0};
-						timeouts.WriteTotalTimeoutConstant = 50;    // 50ms max write timeout
-						timeouts.WriteTotalTimeoutMultiplier = 0;   // No per-byte timeout
+						timeouts.WriteTotalTimeoutConstant = 50; // 50ms max write timeout
+						timeouts.WriteTotalTimeoutMultiplier = 0; // No per-byte timeout
 						SetCommTimeouts(serial_port, &timeouts);
 					}
 					if (!SetCommState(serial_port, &dcb_serial_params))
@@ -526,7 +526,7 @@ namespace usb_lightgun
 				{
 					struct termios tty;
 					memset(&tty, 0, sizeof(tty));
-					
+
 					if (tcgetattr(serial_port, &tty) != 0)
 					{
 						valid_com = false;
@@ -536,7 +536,7 @@ namespace usb_lightgun
 						// Set baud rate to 9600
 						cfsetospeed(&tty, B9600);
 						cfsetispeed(&tty, B9600);
-						
+
 						// 8 bits, no parity, 1 stop bit
 						tty.c_cflag &= ~PARENB; // No parity
 						tty.c_cflag &= ~CSTOPB; // 1 stop bit
@@ -544,16 +544,16 @@ namespace usb_lightgun
 						tty.c_cflag |= CS8; // 8 data bits
 						tty.c_cflag &= ~CRTSCTS; // No hardware flow control
 						tty.c_cflag |= CREAD | CLOCAL; // Enable reading and ignore ctrl lines
-						
+
 						// Raw mode
 						tty.c_lflag &= ~(ICANON | ECHO | ECHOE | ECHONL | ISIG | IEXTEN);
 						tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
 						tty.c_oflag &= ~OPOST;
-						
+
 						// Set timeouts for non-blocking behavior
 						tty.c_cc[VTIME] = 5; // 0.5 second timeout
-						tty.c_cc[VMIN] = 0;  // Return immediately
-						
+						tty.c_cc[VMIN] = 0; // Return immediately
+
 						if (tcsetattr(serial_port, TCSANOW, &tty) != 0)
 						{
 							valid_com = false;
@@ -744,7 +744,7 @@ namespace usb_lightgun
 				else if (queue_size_gunshot > 0)
 				{
 					// Multishot - use pulse system
-				 	GunCon2State::SendComMessage("F0x2x3x");
+					GunCon2State::SendComMessage("F0x2x3x");
 				}
 				else
 				{
@@ -792,8 +792,7 @@ namespace usb_lightgun
 			"SLES-50930", "SLES-51095", "SLUS-20485", "SLUS-20389", "SLPM-65139",
 			"SLES-52620", "SLES-51289", "SLPS-25165", "SLUS-20492", "SLES-50650",
 			"SLUS-20669", "SLES-51617", "SLUS-20619", "SCES-50300", "SLUS-20219",
-			"SCES-51844", "SLUS-20645", "SLUS-20927", "SLUS-20221", "SLES-51229"
-		};
+			"SCES-51844", "SLUS-20645", "SLUS-20927", "SLUS-20221", "SLES-51229"};
 
 
 		int i = 0;
@@ -828,11 +827,10 @@ namespace usb_lightgun
 					recoil_output_thread = new std::thread(&GunCon2State::ThreadOutputs, this);
 					//AutoConfigure();
 					return;
-				}			
+				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		}
-
 	}
 
 	void GunCon2State::AutoConfigure()
@@ -867,138 +865,47 @@ namespace usb_lightgun
 			(has_relative_binds) ? GetAbsolutePositionFromRelativeAxes() : InputManager::GetPointerAbsolutePosition(0);
 		GSTranslateWindowToDisplayCoordinates(window_x, window_y, &pointer_x, &pointer_y);
 
-		//Apply aim adjustement for 2 players TimeCrisis if Widescreen on
-		float pointer_y2 = pointer_y;
-		if ((active_game == "SLUS-20219" || active_game == "SCES-50300" || active_game == "SCES-51844" || active_game == "SLUS-20645") && twoplayer_fix)// && EmuConfig.CurrentAspectRatio == AspectRatioType::R16_9)
+		// Apply game-specific two-player aiming corrections for Time Crisis 2 and 3.
+		if (twoplayer_fix)
 		{
+			const float original_pointer_y = pointer_y;
+			const auto apply_adjustment = [&](float min_x, float max_x, float min_y, float max_y, float curve_scale) {
+				pointer_x = (pointer_x * (max_x - min_x)) + min_x;
+				pointer_y = (pointer_y * (max_y - min_y)) + min_y;
+				if (pointer_y > 0.0f && pointer_y < 1.0f)
+				{
+					pointer_y +=
+						((-0.04f * (original_pointer_y * original_pointer_y)) + (0.04f * original_pointer_y)) * curve_scale;
+				}
+			};
+
 			if (active_game == "SLUS-20219")
 			{
 				if (port == 0)
-				{
-					float min = 0.035;
-					float max = 0.9035;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.25;
-					max = 0.69;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
-				}
-				if (port == 1)
-				{
-					float min = 0.093;
-					float max = 0.970;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
-				}
+					apply_adjustment(0.035f, 0.9035f, 0.25f, 0.69f, 2.7f);
+				else if (port == 1)
+					apply_adjustment(0.093f, 0.970f, 0.247f, 0.690f, 2.7f);
 			}
-			if (active_game == "SCES-50300")
+			else if (active_game == "SCES-50300")
 			{
 				if (port == 0)
-				{
-					float min = 0.02798462;
-					float max = 0.90;
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.25;
-					max = 0.6950202;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
-				}
-				if (port == 1)
-				{
-					float min = 0.093;
-					float max = 0.970;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 2.7;
-				}
+					apply_adjustment(0.02798462f, 0.90f, 0.25f, 0.6950202f, 2.7f);
+				else if (port == 1)
+					apply_adjustment(0.093f, 0.970f, 0.247f, 0.690f, 2.7f);
 			}
-
-			if (active_game == "SCES-51844")
+			else if (active_game == "SCES-51844")
 			{
 				if (port == 0)
-				{
-					float min = 0.035;
-					float max = 0.9035;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.0;
-				}
-				if (port == 1)
-				{
-
-					float min = 0.095;
-					float max = 0.97;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.0;
-				}
+					apply_adjustment(0.035f, 0.9035f, 0.247f, 0.690f, 3.0f);
+				else if (port == 1)
+					apply_adjustment(0.095f, 0.97f, 0.247f, 0.690f, 3.0f);
 			}
-
-			if (active_game == "SLUS-20645")
+			else if (active_game == "SLUS-20645")
 			{
 				if (port == 0)
-				{
-					float min = 0.035;
-					float max = 0.9035;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.1;
-				}
-				if (port == 1)
-				{
-
-					float min = 0.095;
-					float max = 0.97;
-
-					pointer_x = (pointer_x * (max - min)) + min;
-
-					min = 0.247;
-					max = 0.690;
-
-					pointer_y = (pointer_y * (max - min)) + min;
-
-					if (pointer_y > 0 && pointer_y < 1)
-						pointer_y += ((-0.04 * (pointer_y2 * pointer_y2)) + (0.04 * pointer_y2)) * 3.1;
-				}
+					apply_adjustment(0.035f, 0.9035f, 0.247f, 0.690f, 3.1f);
+				else if (port == 1)
+					apply_adjustment(0.095f, 0.97f, 0.247f, 0.690f, 3.1f);
 			}
 		}
 		s16 pos_x, pos_y;
@@ -1138,7 +1045,9 @@ namespace usb_lightgun
 			// Strip the leading hash, if it's a CSS style colour.
 			const std::optional<u32> cursor_color_opt(
 				StringUtil::FromChars<u32>(cursor_color_str[0] == '#' ?
-					std::string_view(cursor_color_str).substr(1) : std::string_view(cursor_color_str), 16));
+											   std::string_view(cursor_color_str).substr(1) :
+											   std::string_view(cursor_color_str),
+					16));
 			if (cursor_color_opt.has_value())
 				cursor_color = cursor_color_opt.value();
 		}
@@ -1146,9 +1055,9 @@ namespace usb_lightgun
 		const s32 prev_pointer_index = s->GetSoftwarePointerIndex();
 
 		s->has_relative_binds = (USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeLeft") ||
-			USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeRight") ||
-			USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeUp") ||
-			USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeDown"));
+								 USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeRight") ||
+								 USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeUp") ||
+								 USB::ConfigKeyExists(si, s->port, TypeName(), "RelativeDown"));
 
 		const s32 new_pointer_index = s->GetSoftwarePointerIndex();
 
@@ -1251,8 +1160,12 @@ namespace usb_lightgun
 			{SettingInfo::Type::Integer, "lightgun_port", TRANSLATE_NOOP("USB", "Lightgun COM port"),
 				TRANSLATE_NOOP("USB", "COM port to enable recoil and ammo count, 0=disabled"), "0", "0", "99", "1", TRANSLATE_NOOP("USB", "%d COM"),
 				nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Boolean, "gamepad_mode", TRANSLATE_NOOP("USB", "Gamepad Mode"),
-				TRANSLATE_NOOP("USB", "If enabled switches the lightgun to gamepad mode"), },
+			{
+				SettingInfo::Type::Boolean,
+				"gamepad_mode",
+				TRANSLATE_NOOP("USB", "Gamepad Mode"),
+				TRANSLATE_NOOP("USB", "If enabled switches the lightgun to gamepad mode"),
+			},
 			{SettingInfo::Type::Boolean, "custom_config", TRANSLATE_NOOP("USB", "Manual Screen Configuration"),
 				TRANSLATE_NOOP("USB",
 					"Forces the use of the screen parameters below, instead of automatic parameters if available."),

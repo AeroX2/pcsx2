@@ -23,11 +23,13 @@ namespace usb_lightgun
 		std::chrono::microseconds::rep trigger_last_press;
 		std::chrono::microseconds::rep trigger_last_release;
 		bool twoplayer_fix;
+		bool full_auto_active;
 	};
 
 	struct GameDetectionResult
 	{
 		std::string output_signal;
+		bool life_lost = false;
 	};
 
 	GameDetectionResult DetectGameEvents(GameDetectionState& state, std::chrono::microseconds::rep timestamp);

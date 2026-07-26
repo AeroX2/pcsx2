@@ -20,6 +20,7 @@
 #include "common/Console.h"
 #include "common/StringUtil.h"
 
+#include <atomic>
 #include <filesystem>
 #include <optional>
 #include <tuple>
@@ -249,9 +250,9 @@ namespace usb_lightgun
 		std::thread* recoil_output_thread = nullptr;
 		std::thread* auto_config_thread = nullptr;
 		std::string active_game = "";
-		bool trigger_is_active = true;
-		std::chrono::microseconds::rep trigger_last_press = 0;
-		std::chrono::microseconds::rep trigger_last_release = 0;
+		std::atomic_bool trigger_is_active{false};
+		std::atomic<std::chrono::microseconds::rep> trigger_last_press{0};
+		std::atomic<std::chrono::microseconds::rep> trigger_last_release{0};
 		std::chrono::microseconds::rep last_gun_shot = 0;
 		std::chrono::microseconds::rep next_gun_shot = 0;
 		int queue_size_gunshot = 0;
@@ -687,10 +688,11 @@ namespace usb_lightgun
 			detection_state.last_charged = last_charged;
 			detection_state.last_other1 = last_other1;
 			detection_state.last_other2 = last_other2;
-			detection_state.trigger_is_active = trigger_is_active;
-			detection_state.trigger_last_press = trigger_last_press;
-			detection_state.trigger_last_release = trigger_last_release;
+			detection_state.trigger_is_active = trigger_is_active.load(std::memory_order_relaxed);
+			detection_state.trigger_last_press = trigger_last_press.load(std::memory_order_relaxed);
+			detection_state.trigger_last_release = trigger_last_release.load(std::memory_order_relaxed);
 			detection_state.twoplayer_fix = twoplayer_fix;
+			detection_state.full_auto_active = full_auto_active;
 
 			GameDetectionResult detection_result = DetectGameEvents(detection_state, timestamp);
 
@@ -698,9 +700,11 @@ namespace usb_lightgun
 			last_ammo = detection_state.last_ammo;
 			last_life = detection_state.last_life;
 			last_weapon = detection_state.last_weapon;
+			last_charged = detection_state.last_charged;
+			last_other1 = detection_state.last_other1;
+			last_other2 = detection_state.last_other2;
 			twoplayer_fix = detection_state.twoplayer_fix;
-			trigger_last_press = detection_state.trigger_last_press;
-			trigger_last_release = detection_state.trigger_last_release;
+			full_auto_active = detection_state.full_auto_active;
 
 			// Extract the signal for processing
 			std::string output_signal = detection_result.output_signal;
@@ -762,16 +766,9 @@ namespace usb_lightgun
 				{
 					next_gun_shot = 0;
 					full_auto_delay = 0;
-				}
-				if (output_signal == "life")
-				{
 					if (IsSerialPortValid())
-					{
-						GunCon2State::SendComMessage("F1x1x");
-						// Set up delayed F1x0x signal (500ms delay)
-						next_life_signal_off = timestamp + 500000; // 500ms in microseconds
-						life_signal_pending = true;
-					}
+						GunCon2State::SendComMessage("F0x0x");
+					recoil_signal_pending = false;
 				}
 			}
 			else
@@ -789,6 +786,18 @@ namespace usb_lightgun
 				{
 					do_recoil = true;
 					next_gun_shot = timestamp + full_auto_delay;
+				}
+			}
+
+			if (detection_result.life_lost)
+			{
+				Console.WriteLn("GUN %c : DAMAGE", port == 0 ? 'A' : 'B');
+				if (IsSerialPortValid())
+				{
+					// Rumble strength is required by GUN4IR; omitting it can result in no motor output.
+					GunCon2State::SendComMessage("F1x1x255x");
+					next_life_signal_off = timestamp + 500000;
+					life_signal_pending = true;
 				}
 			}
 
@@ -828,8 +837,8 @@ namespace usb_lightgun
 
 				if (full_auto_delay > 0)
 				{
-					// Machine gun - use pulse system for rapid fire
-					GunCon2State::SendComMessage("F0x2x10x");
+					// Machine gun - enqueue one pulse at each detected firing interval.
+					GunCon2State::SendComMessage("F0x2x1x");
 				}
 				else if (queue_size_gunshot > 0)
 				{
@@ -1207,6 +1216,24 @@ namespace usb_lightgun
 				s->button_state |= bit;
 			else
 				s->button_state &= ~bit;
+
+			if (bind_index == BID_TRIGGER || bind_index == BID_SHOOT_OFFSCREEN)
+			{
+				const bool trigger_active =
+					(s->button_state & ((1u << BID_TRIGGER) | (1u << BID_SHOOT_OFFSCREEN))) != 0;
+				const bool was_active = s->trigger_is_active.exchange(trigger_active, std::memory_order_relaxed);
+				if (trigger_active != was_active)
+				{
+					const std::chrono::microseconds::rep timestamp =
+						std::chrono::duration_cast<std::chrono::microseconds>(
+							std::chrono::steady_clock::now().time_since_epoch())
+							.count();
+					if (trigger_active)
+						s->trigger_last_press.store(timestamp, std::memory_order_relaxed);
+					else
+						s->trigger_last_release.store(timestamp, std::memory_order_relaxed);
+				}
+			}
 		}
 		else if (bind_index <= BID_RELATIVE_DOWN)
 		{

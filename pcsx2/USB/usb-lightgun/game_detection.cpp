@@ -6,6 +6,37 @@
 
 namespace usb_lightgun
 {
+	static void DetectTimeCrisis2Events(GameDetectionState& state, GameDetectionResult& result,
+		u32 ammo_count, u32 life_count, u32 weapon_type, u32 machinegun_type,
+		std::chrono::microseconds::rep timestamp)
+	{
+		const bool has_previous_ammo = (state.last_ammo != UINT32_MAX);
+		const bool machinegun_should_run =
+			(state.trigger_is_active && ammo_count > 0 && weapon_type == machinegun_type);
+
+		if (machinegun_should_run != state.full_auto_active)
+		{
+			state.full_auto_active = machinegun_should_run;
+			result.output_signal = machinegun_should_run ? "machinegun_on:75" : "machinegun_off";
+		}
+		else if (!state.full_auto_active && has_previous_ammo && ammo_count < state.last_ammo &&
+				 (state.trigger_is_active || (timestamp - state.trigger_last_press) < 100000))
+		{
+			result.output_signal = "gunshot";
+		}
+		else if (has_previous_ammo && ammo_count > state.last_ammo)
+		{
+			result.output_signal = "ammo";
+		}
+
+		if (state.last_life != UINT32_MAX && life_count < state.last_life)
+			result.life_lost = true;
+
+		state.last_ammo = ammo_count;
+		state.last_life = life_count;
+		state.last_weapon = weapon_type;
+	}
+
 	GameDetectionResult DetectGameEvents(GameDetectionState& state, std::chrono::microseconds::rep timestamp)
 	{
 		GameDetectionResult result = {};
@@ -362,24 +393,19 @@ namespace usb_lightgun
 			{
 				valid_query = true;
 				ammo_count = memRead32(0x661A04);
+				life_count = memRead32(0x6618A0);
+				weapon_type = memRead32(0x661A00);
 			}
 			if (state.port == 1)
 			{
 				valid_query = true;
 				ammo_count = memRead32(0x661A34);
+				life_count = memRead32(0x661900);
+				weapon_type = memRead32(0x661A30);
 			}
 			if (valid_query)
-			{
-				if (ammo_count < state.last_ammo && (state.trigger_is_active || diff < 100000))
-				{
-					result.output_signal = "gunshot";
-				}
-				else if (ammo_count > state.last_ammo)
-				{
-					result.output_signal = "ammo";
-				}
-				state.last_ammo = ammo_count;
-			}
+				DetectTimeCrisis2Events(state, result, ammo_count, life_count, weapon_type,
+					state.port == 0 ? 10 : 9, timestamp);
 		}
 
 		//Time Crisis 2 US
@@ -392,30 +418,17 @@ namespace usb_lightgun
 				valid_query = true;
 				ammo_count = memRead32(0x643ABC);
 				life_count = memRead32(0x643958);
+				weapon_type = memRead32(0x643AB8);
 			}
 			if (state.port == 1)
 			{
 				valid_query = true;
 				ammo_count = memRead32(0x643AEC);
 				life_count = memRead32(0x6439B8);
+				weapon_type = memRead32(0x643AE8);
 			}
 			if (valid_query)
-			{
-				if (ammo_count < state.last_ammo && (state.trigger_is_active || diff < 100000))
-				{
-					result.output_signal = "gunshot";
-				}
-				else if (ammo_count > state.last_ammo)
-				{
-					result.output_signal = "ammo";
-				}
-				if (life_count < state.last_life)
-				{
-					result.output_signal = "life";
-				}
-				state.last_ammo = ammo_count;
-				state.last_life = life_count;
-			}
+				DetectTimeCrisis2Events(state, result, ammo_count, life_count, weapon_type, 8, timestamp);
 		}
 
 		//Time Crisis 3 EU

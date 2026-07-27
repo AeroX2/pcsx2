@@ -1881,7 +1881,12 @@ void InputManager::UpdateInputSourceState(SettingsInterface& si, std::unique_loc
 void InputManager::ReloadSources(SettingsInterface& si, std::unique_lock<std::mutex>& settings_lock)
 {
 	const bool has_guncon2 = (USB::GetConfigDevice(si, 0) == "guncon2" || USB::GetConfigDevice(si, 1) == "guncon2");
+
+	// Opening the ManyMouse source blocks on the UI thread to fetch the top-level window, and during startup the
+	// UI thread is itself waiting on the settings lock while it builds the main window. Drop the lock first.
+	settings_lock.unlock();
 	UpdateManyMouseSource(has_guncon2);
+	settings_lock.lock();
 
 	UpdateInputSourceState<SDLInputSource>(si, settings_lock, InputSourceType::SDL);
 #ifdef _WIN32

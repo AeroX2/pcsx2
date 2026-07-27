@@ -24,7 +24,9 @@
 #include <atomic>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <thread>
 #include <vector>
@@ -70,9 +72,58 @@ namespace usb_lightgun
 		BID_POINTER_X = 22,
 	};
 
-	static std::vector<std::string> GetDetectedSerialPorts()
+	struct DetectedSerialPort
 	{
-		std::vector<std::string> ports;
+		std::string name;
+		u16 vendor_id = 0;
+		u16 product_id = 0;
+	};
+
+	// Accepts a USB "VID:PID" pair in hex, e.g. "F143:0001".
+	static bool ParseDeviceId(const std::string_view value, u16* vendor_id, u16* product_id)
+	{
+		const std::string_view trimmed = StringUtil::StripWhitespace(value);
+		const std::string_view::size_type separator = trimmed.find(':');
+		if (separator == std::string_view::npos)
+			return false;
+
+		const std::optional<u16> vid =
+			StringUtil::FromChars<u16>(StringUtil::StripWhitespace(trimmed.substr(0, separator)), 16);
+		const std::optional<u16> pid =
+			StringUtil::FromChars<u16>(StringUtil::StripWhitespace(trimmed.substr(separator + 1)), 16);
+		if (!vid.has_value() || !pid.has_value())
+			return false;
+
+		*vendor_id = vid.value();
+		*product_id = pid.value();
+		return true;
+	}
+
+#ifdef _WIN32
+	// Pulls a four digit hex field out of a device instance ID, e.g. "USB\VID_F143&PID_0001&MI_00\7&22C0671D&1&0000".
+	static u16 ParseInstanceIdField(const char* instance_id, const char* key)
+	{
+		const char* found = std::strstr(instance_id, key);
+		if (!found || std::strlen(found + 4) < 4)
+			return 0;
+
+		return StringUtil::FromChars<u16>(std::string_view(found + 4, 4), 16).value_or(0);
+	}
+#else
+	static u16 ReadSysfsHexValue(const std::filesystem::path& path)
+	{
+		std::ifstream file(path);
+		std::string value;
+		if (!file || !std::getline(file, value))
+			return 0;
+
+		return StringUtil::FromChars<u16>(StringUtil::StripWhitespace(value), 16).value_or(0);
+	}
+#endif
+
+	static std::vector<DetectedSerialPort> GetDetectedSerialPorts()
+	{
+		std::vector<DetectedSerialPort> ports;
 #ifdef _WIN32
 		// Only USB-attached serial devices are considered. Enumerating every COMx DOS device also picks up the
 		// legacy motherboard port that Windows almost always exposes as COM1, which is never a gun but would
@@ -99,16 +150,29 @@ namespace usb_lightgun
 				char port_name[16];
 				DWORD port_name_size = sizeof(port_name);
 				DWORD value_type = 0;
-				if (RegQueryValueExA(dev_key, "PortName", nullptr, &value_type,
-						reinterpret_cast<LPBYTE>(port_name), &port_name_size) == ERROR_SUCCESS &&
-					value_type == REG_SZ)
-				{
-					port_name[std::min<DWORD>(port_name_size, sizeof(port_name) - 1)] = 0;
-					if (std::strncmp(port_name, "COM", 3) == 0)
-						ports.push_back(port_name);
-				}
+				const bool has_port_name =
+					(RegQueryValueExA(dev_key, "PortName", nullptr, &value_type, reinterpret_cast<LPBYTE>(port_name),
+						 &port_name_size) == ERROR_SUCCESS &&
+						value_type == REG_SZ);
 
 				RegCloseKey(dev_key);
+
+				if (!has_port_name)
+					continue;
+
+				port_name[std::min<DWORD>(port_name_size, sizeof(port_name) - 1)] = 0;
+				if (std::strncmp(port_name, "COM", 3) != 0)
+					continue;
+
+				DetectedSerialPort& detected = ports.emplace_back();
+				detected.name = port_name;
+
+				char instance_id[512];
+				if (SetupDiGetDeviceInstanceIdA(dev_info, &dev_data, instance_id, sizeof(instance_id), nullptr))
+				{
+					detected.vendor_id = ParseInstanceIdField(instance_id, "VID_");
+					detected.product_id = ParseInstanceIdField(instance_id, "PID_");
+				}
 			}
 
 			SetupDiDestroyDeviceInfoList(dev_info);
@@ -116,10 +180,10 @@ namespace usb_lightgun
 
 		// Enumeration follows the device tree rather than the port number, so sort numerically (all names share
 		// the COM prefix, so shorter names sort first) to keep the automatic assignment stable.
-		std::sort(ports.begin(), ports.end(), [](const std::string& lhs, const std::string& rhs) {
-			if (lhs.length() != rhs.length())
-				return lhs.length() < rhs.length();
-			return lhs < rhs;
+		std::sort(ports.begin(), ports.end(), [](const DetectedSerialPort& lhs, const DetectedSerialPort& rhs) {
+			if (lhs.name.length() != rhs.name.length())
+				return lhs.name.length() < rhs.name.length();
+			return lhs.name < rhs.name;
 		});
 #else
 		std::error_code ec;
@@ -129,33 +193,80 @@ namespace usb_lightgun
 				break;
 
 			const std::string name = entry.path().filename().string();
-			if (name.starts_with("ttyACM") || name.starts_with("ttyUSB"))
-				ports.push_back(entry.path().string());
+			if (!name.starts_with("ttyACM") && !name.starts_with("ttyUSB"))
+				continue;
+
+			DetectedSerialPort& detected = ports.emplace_back();
+			detected.name = entry.path().string();
+
+			// The tty's device link points at the USB interface; idVendor/idProduct live a couple of levels further
+			// up, on the device itself.
+			std::error_code sysfs_ec;
+			std::filesystem::path node =
+				std::filesystem::canonical(std::filesystem::path("/sys/class/tty") / name / "device", sysfs_ec);
+			for (u32 depth = 0; !sysfs_ec && depth < 4 && node.has_parent_path(); depth++)
+			{
+				if (std::filesystem::exists(node / "idVendor", sysfs_ec))
+				{
+					detected.vendor_id = ReadSysfsHexValue(node / "idVendor");
+					detected.product_id = ReadSysfsHexValue(node / "idProduct");
+					break;
+				}
+
+				node = node.parent_path();
+			}
 		}
-		std::sort(ports.begin(), ports.end());
+
+		std::sort(ports.begin(), ports.end(), [](const DetectedSerialPort& lhs, const DetectedSerialPort& rhs) {
+			return lhs.name < rhs.name;
+		});
 #endif
 		return ports;
 	}
 
-	static std::optional<std::string> ResolveSerialPort(int setting, u32 guncon_port)
+	static std::optional<std::string> ResolveSerialPort(
+		const std::string& device_setting, int port_setting, u32 guncon_port)
 	{
-		if (setting < 0)
+		// An explicit VID:PID wins over everything else. COM port numbers are assigned by Windows and shuffle
+		// whenever a board is plugged into a different socket; the USB IDs don't.
+		u16 vendor_id = 0;
+		u16 product_id = 0;
+		if (ParseDeviceId(device_setting, &vendor_id, &product_id))
+		{
+			std::vector<std::string> matches;
+			for (const DetectedSerialPort& detected : GetDetectedSerialPorts())
+			{
+				if (detected.vendor_id == vendor_id && detected.product_id == product_id)
+					matches.push_back(detected.name);
+			}
+
+			// Guns normally have an ID each, so a single match belongs to whichever gun asked for it. If several
+			// identical boards are attached they can only be told apart by order, so fall back to that.
+			if (guncon_port < matches.size())
+				return matches[guncon_port];
+			if (!matches.empty())
+				return matches.front();
+
+			return std::nullopt;
+		}
+
+		if (port_setting < 0)
 			return std::nullopt;
 
-		if (setting > 0)
+		if (port_setting > 0)
 		{
 #ifdef _WIN32
-			return fmt::format("COM{}", setting);
+			return fmt::format("COM{}", port_setting);
 #else
-			return fmt::format("/dev/ttyACM{}", setting - 1);
+			return fmt::format("/dev/ttyACM{}", port_setting - 1);
 #endif
 		}
 
-		const std::vector<std::string> detected_ports = GetDetectedSerialPorts();
+		const std::vector<DetectedSerialPort> detected_ports = GetDetectedSerialPorts();
 		if (guncon_port >= detected_ports.size())
 			return std::nullopt;
 
-		return detected_ports[guncon_port];
+		return detected_ports[guncon_port].name;
 	}
 
 	// Right pain in the arse. Different games seem to have different scales..
@@ -313,6 +424,7 @@ namespace usb_lightgun
 		bool full_auto_active = false;
 		bool twoplayer_fix = false;
 		int serial_port_setting = 0;
+		std::string serial_device_setting;
 		bool gamepad_mode = false;
 		bool serial_write_error_reported = false;
 		std::string active_serial_port_name;
@@ -588,7 +700,8 @@ namespace usb_lightgun
 		if (active_game != "")
 		{
 			bool valid_com = false;
-			const std::optional<std::string> serial_port_name = ResolveSerialPort(serial_port_setting, port);
+			const std::optional<std::string> serial_port_name =
+				ResolveSerialPort(serial_device_setting, serial_port_setting, port);
 			if (serial_port_name.has_value())
 			{
 				valid_com = true;
@@ -1164,6 +1277,7 @@ namespace usb_lightgun
 
 		s->custom_config = USB::GetConfigBool(si, s->port, TypeName(), "custom_config", false);
 		s->serial_port_setting = USB::GetConfigInt(si, s->port, TypeName(), "lightgun_port", 0);
+		s->serial_device_setting = USB::GetConfigString(si, s->port, TypeName(), "lightgun_device", "");
 		s->gamepad_mode = USB::GetConfigBool(si, s->port, TypeName(), "gamepad_mode", false);
 
 		// Don't override auto config if we've set it.
@@ -1331,10 +1445,16 @@ namespace usb_lightgun
 				TRANSLATE_NOOP("USB", "Applies a color to the chosen crosshair images, can be used for multiple "
 									  "players. Specify in HTML/CSS format (e.g. #aabbcc)"),
 				"#ffffff"},
+			{SettingInfo::Type::String, "lightgun_device", TRANSLATE_NOOP("USB", "Lightgun USB Device"),
+				TRANSLATE_NOOP("USB",
+					"Identifies the feedback board by its USB vendor and product ID in hex, e.g. F143:0001. This is "
+					"stable across replugging, unlike the COM port number. Leave blank to use the port setting below."),
+				""},
 			{SettingInfo::Type::Integer, "lightgun_port", TRANSLATE_NOOP("USB", "Lightgun COM port"),
 				TRANSLATE_NOOP("USB",
-					"Serial feedback port. Automatic assigns the first detected port to GunCon 1 and the second to "
-					"GunCon 2. Use -1 to disable, 0 for automatic, or a positive COM port number to override."),
+					"Serial feedback port, used only when no USB device is set above. Automatic assigns the first "
+					"detected port to GunCon 1 and the second to GunCon 2. Use -1 to disable, 0 for automatic, or a "
+					"positive COM port number to override."),
 				"0", "-1", "99", "1", TRANSLATE_NOOP("USB", "%d"),
 				nullptr, nullptr, 1.0f},
 			{

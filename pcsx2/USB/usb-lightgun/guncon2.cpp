@@ -20,7 +20,9 @@
 #include "common/Console.h"
 #include "common/StringUtil.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <tuple>
@@ -29,11 +31,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <setupapi.h>
 #else
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
-#include <cstring>
 #endif
 #include "Memory.h"
 
@@ -72,13 +74,53 @@ namespace usb_lightgun
 	{
 		std::vector<std::string> ports;
 #ifdef _WIN32
-		for (u32 port = 1; port <= 99; port++)
+		// Only USB-attached serial devices are considered. Enumerating every COMx DOS device also picks up the
+		// legacy motherboard port that Windows almost always exposes as COM1, which is never a gun but would
+		// take gun 1's slot and shift every other gun along by one. USB CDC, CH340, CP210x and PL2303 ports all
+		// live under the USB enumerator; FTDI's virtual COM port driver creates its port under FTDIBUS instead.
+		// This mirrors the ttyACM/ttyUSB filter used on Linux below.
+		for (const char* enumerator : {"USB", "FTDIBUS"})
 		{
-			const std::string name = fmt::format("COM{}", port);
-			char target[512];
-			if (QueryDosDeviceA(name.c_str(), target, std::size(target)) != 0)
-				ports.push_back(name);
+			const HDEVINFO dev_info =
+				SetupDiGetClassDevsA(nullptr, enumerator, nullptr, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+			if (dev_info == INVALID_HANDLE_VALUE)
+				continue;
+
+			SP_DEVINFO_DATA dev_data = {};
+			dev_data.cbSize = sizeof(dev_data);
+			for (DWORD index = 0; SetupDiEnumDeviceInfo(dev_info, index, &dev_data); index++)
+			{
+				const HKEY dev_key =
+					SetupDiOpenDevRegKey(dev_info, &dev_data, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+				if (dev_key == INVALID_HANDLE_VALUE)
+					continue;
+
+				// Devices which aren't serial ports simply don't have a PortName.
+				char port_name[16];
+				DWORD port_name_size = sizeof(port_name);
+				DWORD value_type = 0;
+				if (RegQueryValueExA(dev_key, "PortName", nullptr, &value_type,
+						reinterpret_cast<LPBYTE>(port_name), &port_name_size) == ERROR_SUCCESS &&
+					value_type == REG_SZ)
+				{
+					port_name[std::min<DWORD>(port_name_size, sizeof(port_name) - 1)] = 0;
+					if (std::strncmp(port_name, "COM", 3) == 0)
+						ports.push_back(port_name);
+				}
+
+				RegCloseKey(dev_key);
+			}
+
+			SetupDiDestroyDeviceInfoList(dev_info);
 		}
+
+		// Enumeration follows the device tree rather than the port number, so sort numerically (all names share
+		// the COM prefix, so shorter names sort first) to keep the automatic assignment stable.
+		std::sort(ports.begin(), ports.end(), [](const std::string& lhs, const std::string& rhs) {
+			if (lhs.length() != rhs.length())
+				return lhs.length() < rhs.length();
+			return lhs < rhs;
+		});
 #else
 		std::error_code ec;
 		for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator("/dev", ec))
